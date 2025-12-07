@@ -19,7 +19,7 @@ const PROXY_FILE: &str = "Data/hasil_proxy_IP.txt";
 const OUTPUT_AZ: &str = "Data/alive-amass.txt";
 const OUTPUT_PRIORITY: &str = "Data/Country-ALIVE-amass.txt";
 const MAX_CONCURRENT: usize = 1000;
-const TIMEOUT_SECONDS: u64 = 6;
+const TIMEOUT_SECONDS: u64 = 15;
 const PRIORITY_COUNTRIES: [&str; 4] = ["ID", "MY", "SG", "HK"];
 
 const USER_AGENTS: &[&str] = &[
@@ -107,11 +107,27 @@ async fn main() -> Result<()> {
     };
 
     println!("✓ Loaded {} proxies", proxies.len());
+    
+    // --- STEP 1: VERBOSE ORIGINAL IP CHECK ---
     println!("\n[1/3] Getting original IP info...");
 
     let original_ip_data = match get_original_ip_info().await {
-        Ok(data) => data,
-        Err(_) => get_ip_from_alternative_api().await.map_err(|_| "Failed to get original IP")?,
+        Ok(data) => {
+            println!("✓ Got IP info from Cloudflare");
+            data
+        },
+        Err(e) => {
+            println!("⚠️  Cloudflare failed: {}. Trying alternative API...", e);
+            match get_ip_from_alternative_api().await {
+                Ok(data) => {
+                    println!("✓ Got IP info from alternative API");
+                    data
+                },
+                Err(e2) => {
+                    return Err(format!("All methods failed: {} | {}", e, e2).into());
+                }
+            }
+        }
     };
 
     let original_ip = original_ip_data.get("clientIp")
@@ -120,7 +136,11 @@ async fn main() -> Result<()> {
         .to_string();
 
     println!("✓ Original IP: {}", original_ip);
+    if let Some(country) = original_ip_data.get("country").and_then(|v| v.as_str()) {
+        println!("✓ Original Location: {}", country);
+    }
 
+    // --- STEP 2: SCANNING ---
     let active_proxies = Arc::new(Mutex::new(Vec::new()));
     let counter = Arc::new(Mutex::new((0u32, proxies.len())));
 
@@ -137,6 +157,7 @@ async fn main() -> Result<()> {
                 
                 let mut counter_lock = counter.lock().unwrap();
                 counter_lock.0 += 1;
+                // Update progress tiap 2000 proxy
                 if counter_lock.0 % 2000 == 0 || counter_lock.0 == counter_lock.1 as u32 {
                      println!("  Progress: {}/{} - Live: {}", 
                            counter_lock.0, counter_lock.1,
@@ -148,6 +169,7 @@ async fn main() -> Result<()> {
 
     tasks.await;
 
+    // --- STEP 3: RESULTS ---
     println!("\n[3/3] Processing results...");
     
     let active_proxies_locked = active_proxies.lock().unwrap();
@@ -188,10 +210,30 @@ fn read_proxy_file(file_path: &str) -> io::Result<Vec<String>> {
     Ok(proxies)
 }
 
+// --- FUNGSI INI YANG DI UPDATE AGAR VERBOSE ---
 async fn get_original_ip_info() -> Result<Value> {
     let mut cookie_jar = CookieJar::new();
-    make_request(IP_RESOLVER, PATH_HOME, None, &mut cookie_jar, false).await?;
-    let (_, meta_body) = make_request(IP_RESOLVER, PATH_META, None, &mut cookie_jar, true).await?;
+    
+    println!("  Getting homepage for cookies...");
+    let (headers, body) = make_request(IP_RESOLVER, PATH_HOME, None, &mut cookie_jar, false).await?;
+    
+    // Tampilkan detail Homepage
+    let status_line = headers.lines().next().unwrap_or("Unknown Status");
+    println!("  Homepage status: {}", status_line);
+    println!("  Homepage response length: {} bytes", body.len());
+
+    println!("  Getting meta data...");
+    let (meta_headers, meta_body) = make_request(IP_RESOLVER, PATH_META, None, &mut cookie_jar, true).await?;
+    
+    // Tampilkan detail Meta Endpoint
+    let meta_status = meta_headers.lines().next().unwrap_or("Unknown Status");
+    println!("  Meta endpoint status: {}", meta_status);
+    println!("  Meta response length: {} bytes", meta_body.len());
+    
+    // Tampilkan Preview JSON
+    let preview: String = meta_body.chars().take(200).collect();
+    println!("  First 200 chars: {}", preview);
+    
     parse_json_response(&meta_body)
 }
 
@@ -271,7 +313,6 @@ async fn make_request(
         }
     })
     .await
-    // FIX: Menggunakan Box::from() agar tipe data eksplisit dan tidak ambigu
     .map_err(|_| Box::<dyn std::error::Error + Send + Sync>::from("Request timeout"))?
 }
 
