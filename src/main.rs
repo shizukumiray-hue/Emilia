@@ -14,11 +14,11 @@ use tokio_native_tls::TlsConnector as TokioTlsConnector;
 const IP_RESOLVER: &str = "speed.cloudflare.com";
 const PATH_HOME: &str = "/";
 const PATH_META: &str = "/meta";
-const PROXY_FILE: &str = "Data/IPPROXY23K.txt";
-const OUTPUT_AZ: &str = "Data/alive.txt";
-const OUTPUT_PRIORITY: &str = "Data/Country-ALIVE.txt";
+const PROXY_FILE: &str = "Data/hasil_proxy_IP.txt";
+const OUTPUT_AZ: &str = "Data/alive-amass.txt";
+const OUTPUT_PRIORITY: &str = "Data/Country-ALIVE-amass.txt";
 const MAX_CONCURRENT: usize = 300;
-const TIMEOUT_SECONDS: u64 = 11;
+const TIMEOUT_SECONDS: u64 = 10;
 const PRIORITY_COUNTRIES: [&str; 4] = ["ID", "MY", "SG", "HK"];
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
