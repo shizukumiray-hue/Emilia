@@ -17,7 +17,7 @@ const PATH_META: &str = "/meta";
 const PROXY_FILE: &str = "Data/IPPROXY23K.txt";
 const OUTPUT_AZ: &str = "Data/alive.txt";
 const OUTPUT_PRIORITY: &str = "Data/Country-ALIVE.txt";
-const MAX_CONCURRENT: usize = 200;
+const MAX_CONCURRENT: usize = 300;
 const TIMEOUT_SECONDS: u64 = 11;
 const PRIORITY_COUNTRIES: [&str; 4] = ["ID", "MY", "SG", "HK"];
 
@@ -447,18 +447,22 @@ async fn process_proxy_with_session(
     original_ip: &str,
     active_proxies: &Arc<Mutex<Vec<ProxyEntry>>>,
 ) {
-    // Parse proxy line
-    let parts: Vec<&str> = proxy_line.split(',').collect();
-    if parts.len() < 4 {
-        return;
-    }
+    // MODIFIKASI 1: Mendukung separator koma (,) atau titik dua (:)
+    // Ini biar support format IP:PORT dari hasil masscan kamu sebelumnya
+    let (ip, port_str) = if proxy_line.contains(',') {
+        let parts: Vec<&str> = proxy_line.split(',').collect();
+        if parts.len() < 2 { return; }
+        (parts[0], parts[1])
+    } else if proxy_line.contains(':') {
+        let parts: Vec<&str> = proxy_line.split(':').collect();
+        if parts.len() < 2 { return; }
+        (parts[0], parts[1])
+    } else {
+        return; // Format tidak dikenali
+    };
 
-    let ip = parts[0];
-    let port_str = parts[1];
-    let country_from_file = parts[2];
-    let org_from_file = parts[3];
-
-    let port_num = match port_str.parse::<u16>() {
+    // Kita parse port-nya
+    let port_num = match port_str.trim().parse::<u16>() {
         Ok(p) => p,
         Err(_) => return,
     };
@@ -478,25 +482,27 @@ async fn process_proxy_with_session(
                 Ok(proxy_data) => {
                     if let Some(Value::String(proxy_ip)) = proxy_data.get("clientIp") {
                         if proxy_ip != original_ip {
-                            // Get country from Cloudflare response
+                            
+                            // MODIFIKASI 2: Ambil Country & ISP Murni dari Cloudflare
+                            // Kalau inputmu cuma IP:PORT, kita wajib ambil data ini dari respon server.
+                            
                             let country = if let Some(Value::String(country_code)) = proxy_data.get("country") {
                                 country_code.clone()
                             } else {
-                                country_from_file.to_string()
+                                "Unknown".to_string() // Fallback jika cloudflare tidak kasih info negara
                             };
 
-                            // Get organization from Cloudflare response  
                             let org = if let Some(Value::String(org_val)) = proxy_data.get("asOrganization") {
                                 clean_org_name(org_val)
                             } else {
-                                clean_org_name(org_from_file)
+                                "Unknown".to_string() // Fallback jika cloudflare tidak kasih info ISP
                             };
 
                             let proxy_entry = ProxyEntry {
                                 ip: ip.to_string(),
                                 port: port_num,
-                                country,
-                                org,
+                                country, // Data hasil scan
+                                org,     // Data hasil scan
                             };
                             
                             let mut active_proxies_locked = active_proxies.lock().unwrap();
