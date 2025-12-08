@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use native_tls::TlsConnector as NativeTlsConnector;
@@ -94,7 +94,7 @@ impl CookieJar {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct DebugStats {
     total_tested: u32,
     successful: u32,
@@ -127,7 +127,14 @@ impl DebugStats {
 
 fn debug_log(level: u8, message: &str) {
     if DEBUG_LEVEL >= level {
-        let timestamp = chrono::Local::now().format("%H:%M:%S");
+        // Simple timestamp without chrono
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+        let secs = now.as_secs() % 86400;
+        let hours = secs / 3600;
+        let minutes = (secs % 3600) / 60;
+        let seconds = secs % 60;
+        let timestamp = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+        
         let prefix = match level {
             1 => "[INFO]",
             2 => "[DETAIL]",
@@ -167,11 +174,13 @@ async fn main() -> Result<()> {
 
     // Get original IP
     println!("\n[1/4] Getting original IP info...");
-    let original_ip_data = get_original_ip_info().await
-        .or_else(|e| {
+    let original_ip_data = match get_original_ip_info().await {
+        Ok(data) => data,
+        Err(e) => {
             debug_log(1, &format!("Cloudflare failed: {}, trying alternative...", e));
-            get_ip_from_alternative_api().await
-        })?;
+            get_ip_from_alternative_api().await?
+        }
+    };
     
     let original_ip = original_ip_data.get("clientIp")
         .and_then(|v| v.as_str())
@@ -353,7 +362,7 @@ async fn test_proxy(
     
     // Step 1: TCP Connection
     let tcp_connect_start = Instant::now();
-    let stream = match tokio::time::timeout(
+    let mut stream = match tokio::time::timeout(
         Duration::from_secs(CONNECT_TIMEOUT),
         TcpStream::connect(&proxy_addr)
     ).await {
@@ -514,18 +523,19 @@ async fn test_proxy(
                 let entry = ProxyEntry {
                     ip: ip.clone(),
                     port,
-                    country: country.unwrap_or_else(|| "XX".to_string()),
+                    country: country.clone().unwrap_or_else(|| "XX".to_string()),
                     org: org.unwrap_or_else(|| "Unknown".to_string()),
                     tcp_connect_ms,
                     tls_handshake_ms,
                     total_ms,
                 };
                 
+                let country_clone = entry.country.clone();
                 active_proxies.lock().await.push(entry);
                 
                 let mut stats = debug_stats.lock().await;
                 stats.successful += 1;
-                *stats.by_country.entry(entry.country.clone()).or_insert(0) += 1;
+                *stats.by_country.entry(country_clone).or_insert(0) += 1;
                 
                 debug_log(1, &format!("✅ {}:{} - {}ms via {}", ip, port, total_ms, proxy_ip));
             } else {
@@ -737,11 +747,10 @@ async fn get_original_ip_info() -> Result<Value> {
         .send()
         .await?;
     
-    if let Some(cookies) = response.headers().get_all("set-cookie") {
-        for cookie in cookies {
-            if let Ok(cookie_str) = cookie.to_str() {
-                cookie_jar.add_from_headers(&format!("set-cookie: {}", cookie_str));
-            }
+    // Get cookies from response headers
+    for cookie_header in response.headers().get_all("set-cookie") {
+        if let Ok(cookie_str) = cookie_header.to_str() {
+            cookie_jar.add_from_headers(&format!("set-cookie: {}", cookie_str));
         }
     }
     
@@ -897,7 +906,7 @@ fn print_sorting_summary(proxies: &[ProxyEntry]) {
     if !others.is_empty() {
         println!("\n  Other countries:");
         for (country, count) in others {
-            let avg_latency = latencies.get(*country)
+            let avg_latency = latencies.get(country)
                 .map(|vals| vals.iter().sum::<u128>() / vals.len() as u128)
                 .unwrap_or(0);
             println!("    {}: {} (avg {}ms)", country, count, avg_latency);
