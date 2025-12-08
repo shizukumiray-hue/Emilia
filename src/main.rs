@@ -17,7 +17,7 @@ use tokio_native_tls::TlsConnector as TokioTlsConnector;
 const IP_RESOLVER: &str = "speed.cloudflare.com";
 const PATH_HOME: &str = "/";
 const PATH_META: &str = "/meta";
-const PROXY_FILE: &str = "Data/batch_00.txt";
+const PROXY_FILE: &str = "Data/alive.txt";
 const OUTPUT_AZ: &str = "Data/alive-amass.txt";
 const OUTPUT_PRIORITY: &str = "Data/Country-ALIVE-amass.txt";
 const MAX_CONCURRENT: usize = 300;
